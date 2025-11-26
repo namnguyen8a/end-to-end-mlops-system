@@ -1,10 +1,68 @@
-# Python-generated files
+# Python cache and compiled files
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments & local env files
+.venv/
+venv/
+ENV/
+.env
+.env.*
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# IDE / editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build / packaging artifacts
 build/
 dist/
-wheels/
-*.egg-info
+*.egg-info/
 
-# Virtual environments
-.venv
+# Test / coverage artifacts
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+logs/
+*.log
+
+# Data artifacts (keep structure, ignore heavy files)
+data/**/*.parquet
+data/**/*.csv
+data/**/*.json
+data/**/*.feather
+data/**/*.pickle
+data/**/*.pkl
+
+# Model artifacts
+models/**/*.pkl
+models/**/*.pickle
+models/**/*.joblib
+models/**/*.h5
+models/**/*.onnx
+models/**/weights*.h5
+
+# MLflow experiments
+mlruns/
+
+# Airflow & pipeline logs
+pipelines/airflow/logs/
+airflow_logs/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Project documentation to ignore
+docs/BA-PROJECT-IMPLEMENTATION-PLAN.md
