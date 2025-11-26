@@ -1,0 +1,5 @@
+outs:
+- md5: 50e4acfdc15762df0d3e8fc1dc473a9c
+  size: 75667
+  hash: md5
+  path: insurance_stocks_weekly_10y.csv
