@@ -2,3 +2,5 @@
     remote = myremote
 ['remote "myremote"']
     url = gs://mlops-tiker-bucket/raw-dataset
+['remote "processed"']
+    url = gs://mlops-tiker-bucket/processed-data
