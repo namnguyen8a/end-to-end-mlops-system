@@ -1,0 +1,5 @@
+outs:
+- md5: 79f8290e0111753e162b3e5b38a9cd7b
+  size: 7352
+  hash: md5
+  path: MIG_weekly_clean.csv

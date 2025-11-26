@@ -1,0 +1,5 @@
+outs:
+- md5: 76e5f36838706268937c08adae2378d0
+  size: 9586
+  hash: md5
+  path: BIC_weekly_clean.csv

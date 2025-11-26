@@ -1,0 +1,5 @@
+outs:
+- md5: 9020665b89c655a266ff8b44a48cb201
+  size: 9560
+  hash: md5
+  path: PGI_weekly_clean.csv

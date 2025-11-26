@@ -1,0 +1,5 @@
+outs:
+- md5: 51a16973db481e43453cd889cc72d787
+  size: 9602
+  hash: md5
+  path: BMI_weekly_clean.csv
