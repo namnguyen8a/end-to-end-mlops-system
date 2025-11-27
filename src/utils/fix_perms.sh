@@ -1,6 +1,7 @@
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# This file is in src/utils, repo root is two levels up
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Fixing permissions under $REPO_ROOT/data for Airflow uid 50000..."
 sudo chown -R 50000:0 "$REPO_ROOT/data"
