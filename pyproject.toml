@@ -6,12 +6,19 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "dvc[all]>=3.64.0",
+    "evidently>=0.7.17",
+    "fastapi>=0.122.0",
+    "google-cloud-storage>=3.6.0",
+    "httpx>=0.28.1",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "mlflow>=3.6.0",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
+    "prometheus-fastapi-instrumentator>=7.1.0",
     "pymysql>=1.1.2",
+    "pytest>=9.0.1",
     "scikit-learn>=1.7.2",
+    "uvicorn>=0.38.0",
     "vnstock>=3.3.0",
 ]

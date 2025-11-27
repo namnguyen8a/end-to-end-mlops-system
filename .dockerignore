@@ -1,0 +1,77 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# Virtual environments
+.venv
+venv
+ENV
+env
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# MLflow
+mlruns/
+
+# Data (will be mounted as volume or copied separately)
+data/raw/
+data/features/
+
+# Artifacts
+artifacts/
+
+# DVC
+.dvc/
+.dvcignore
+
+# Tests
+tests/
+.pytest_cache/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Config files with secrets
+config/*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# CI/CD
+.github/
+
+# Lock files (dependencies installed from requirements.txt)
+uv.lock
+

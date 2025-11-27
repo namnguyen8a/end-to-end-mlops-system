@@ -2,13 +2,18 @@ import pandas as pd
 import time
 from vnstock import Quote
 from datetime import datetime
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"
+DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 # 1. Configuration
 # Top 5 Insurance stocks on HOSE
 tickers = ['BIC', 'BMI', 'BVH', 'MIG', 'PGI']
 start_date = '2014-11-26'
 end_date = '2025-11-23'
-output_file = 'data/raw/insurance_stocks_weekly_10y.csv'
+OUTPUT_FILE = DATA_RAW_DIR / "insurance_stocks_weekly_10y.csv"
 
 all_data = [] # List to store dataframes
 
@@ -62,9 +67,9 @@ if all_data:
     final_df = final_df[['time', 'ticker', 'close', 'volume']]
     
     # Save to CSV
-    final_df.to_csv(output_file, index=False)
+    final_df.to_csv(OUTPUT_FILE, index=False)
     
-    print(f"\n✅ Success! Saved {len(final_df)} rows to '{output_file}'")
+    print(f"\n✅ Success! Saved {len(final_df)} rows to '{OUTPUT_FILE}'")
     print(final_df.head())
     print(final_df.tail())
 else:

@@ -1,0 +1,289 @@
+version: '3.8'
+
+networks:
+  mlops-net:
+    driver: bridge
+
+volumes:
+  postgres-db-volume:
+  grafana-storage:
+  loki-storage:
+
+services:
+  # ---------- MLflow tracking server + MySQL ----------
+  mlflow:
+    build:
+      context: ./docker/mlflow
+      dockerfile: Dockerfile
+    container_name: mlflow
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/service-account.json
+    volumes:
+      - ./config/able-bazaar-477311-s0-e7b9ea511911.json:/app/service-account.json:ro
+    ports:
+      - "5000:5000"
+    networks:
+      - mlops-net
+    depends_on:
+      - mysql-mlflow
+
+  mysql-mlflow:
+    image: mysql:8
+    container_name: mysql-mlflow
+    environment:
+      - MYSQL_DATABASE=mlflowdb
+      - MYSQL_USER=mlflowuser
+      - MYSQL_PASSWORD=mlflow_pass
+      - MYSQL_ROOT_PASSWORD=rootpass
+    command: --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3307:3306"
+    networks:
+      - mlops-net
+
+  # ---------- FastAPI prediction service ----------
+  ml_service:
+    build:
+      context: .
+      dockerfile: ./docker/api/Dockerfile
+    container_name: ml_service
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/service-account.json
+      - MODEL_STAGE=Staging
+    volumes:
+      - ./config/able-bazaar-477311-s0-e7b9ea511911.json:/app/service-account.json:ro
+      - ./reports:/app/reports
+    ports:
+      - "8000:8000"
+    networks:
+      - mlops-net
+    depends_on:
+      - mlflow
+
+  # ---------- Airflow (single node) ----------
+  postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - mlops-net
+
+  airflow-init:
+    image: apache/airflow:2.10.2
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/tmp
+        chown -R "50000:0" /sources/{logs,dags,plugins,tmp}
+        exec /entrypoint airflow version
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'true'
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
+      AIRFLOW__TASK_SDK__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__TASK_SDK__API_VERSION: '2025-10-27'
+      AIRFLOW__API_AUTH__JWT_SECRET: 'my-super-secret-jwt-key-for-airflow-2025'
+      AIRFLOW__EXECUTION_API__JWT_AUDIENCE: 'urn:airflow.apache.org:task'
+      AIRFLOW__EXECUTION_API__JWT_EXPIRATION_TIME: '600'
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      GOOGLE_APPLICATION_CREDENTIALS: "/opt/mlops-system/config/able-bazaar-477311-s0-e7b9ea511911.json"
+      GCS_PROCESSED_PREFIX: "gs://mlops-tiker-bucket/processed"
+      _PIP_ADDITIONAL_REQUIREMENTS: ""
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    user: "0:0"
+    volumes:
+      - ./airflow:/sources
+    networks:
+      - mlops-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    image: apache/airflow:2.10.2
+    container_name: airflow-webserver
+    command: webserver
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'true'
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
+      AIRFLOW__TASK_SDK__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__TASK_SDK__API_VERSION: '2025-10-27'
+      AIRFLOW__API_AUTH__JWT_SECRET: 'my-super-secret-jwt-key-for-airflow-2025'
+      AIRFLOW__EXECUTION_API__JWT_AUDIENCE: 'urn:airflow.apache.org:task'
+      AIRFLOW__EXECUTION_API__JWT_EXPIRATION_TIME: '600'
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      GOOGLE_APPLICATION_CREDENTIALS: "/opt/mlops-system/config/able-bazaar-477311-s0-e7b9ea511911.json"
+      GCS_PROCESSED_PREFIX: "gs://mlops-tiker-bucket/processed"
+      _PIP_ADDITIONAL_REQUIREMENTS: ""
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/tmp:/opt/airflow/tmp
+      - .:/opt/mlops-system
+    ports:
+      - "8080:8080"
+    restart: always
+    networks:
+      - mlops-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.2
+    container_name: airflow-scheduler
+    command: scheduler
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'true'
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
+      AIRFLOW__TASK_SDK__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__TASK_SDK__API_VERSION: '2025-10-27'
+      AIRFLOW__API_AUTH__JWT_SECRET: 'my-super-secret-jwt-key-for-airflow-2025'
+      AIRFLOW__EXECUTION_API__JWT_AUDIENCE: 'urn:airflow.apache.org:task'
+      AIRFLOW__EXECUTION_API__JWT_EXPIRATION_TIME: '600'
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      GOOGLE_APPLICATION_CREDENTIALS: "/opt/mlops-system/config/able-bazaar-477311-s0-e7b9ea511911.json"
+      GCS_PROCESSED_PREFIX: "gs://mlops-tiker-bucket/processed"
+      _PIP_ADDITIONAL_REQUIREMENTS: ""
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/tmp:/opt/airflow/tmp
+      - .:/opt/mlops-system
+    restart: always
+    networks:
+      - mlops-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------- Monitoring: Prometheus + Loki + Promtail + Grafana ----------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./src/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - mlops-net
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-storage:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - mlops-net
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./src/monitoring/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    depends_on:
+      - loki
+    networks:
+      - mlops-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - mlops-net
+    depends_on:
+      - prometheus
+      - loki
+
+  grafana-setup:
+    build:
+      context: ./src/monitoring/grafana-setup
+      dockerfile: Dockerfile
+    container_name: grafana-setup
+    depends_on:
+      - grafana
+      - prometheus
+      - loki
+    networks:
+      - mlops-net
+    restart: "no"
+
+  report_server:
+    image: nginx:alpine
+    container_name: report_viewer
+    ports:
+      - "8081:80"
+    volumes:
+      - ./reports:/usr/share/nginx/html:ro
+    networks:
+      - mlops-net

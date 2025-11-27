@@ -1,5 +1,8 @@
 import os
 import pandas as pd
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # /opt/mlops-system
 
 # === Split each ticker into its own cleaned CSV for training ===
 
@@ -16,7 +19,7 @@ df_wide = (
 )
 
 # 3. Prepare output directory
-output_dir = "../data/processed"
+output_dir = PROJECT_ROOT / "data" / "processed"
 os.makedirs(output_dir, exist_ok=True)
 
 # 4. Clean and save core tickers (BIC, BMI, BVH, PGI) over full history

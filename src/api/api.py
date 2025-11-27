@@ -9,10 +9,9 @@ import os
 import io
 
 from google.cloud import storage  
+from prometheus_fastapi_instrumentator import Instrumentator
 
-# -------------------------------------------------------------------
-# MLflow configuration
-# -------------------------------------------------------------------
+
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
@@ -23,8 +22,10 @@ GCS_PROCESSED_PREFIX = os.getenv(
     "gs://mlops-tiker-bucket/processed",
 )
 
-# FastAPI app
 app = FastAPI(title="Insurance Weekly Price Predictor")
+
+# Prometheus metrics at /metrics
+instrumentator = Instrumentator().instrument(app).expose(app)
 
 # One registry model per ticker
 MODEL_NAMES: Dict[str, str] = {

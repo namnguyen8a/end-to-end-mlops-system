@@ -12,9 +12,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from mlflow.tracking import MlflowClient
 from google.cloud import storage
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # /opt/mlops-system inside container
 
 # ---------------- Logging ----------------
-log_dir = "../logs"
+log_dir = PROJECT_ROOT / "logs" / "mlflow_training"
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
@@ -36,7 +40,7 @@ logger.info(f"MLflow tracking URI: {MLFLOW_TRACKING_URI}")
 logger.info(f"MLflow experiment: insurance_weekly_training_v2")
 
 # ---------------- Artifacts ----------------
-ARTIFACT_DIR = "../artifacts"
+ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 os.makedirs(ARTIFACT_DIR, exist_ok=True)
 logger.info(f"Artifact directory: {ARTIFACT_DIR}")
 
