@@ -11,7 +11,8 @@ import os
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-DATA_PATH = "../data/processed"
+# Use environment variable if set, otherwise default to relative path
+DATA_PATH = os.getenv("DATA_PATH", "../data/processed")
 
 app = FastAPI(title="Insurance Weekly Price Predictor")
 
@@ -38,7 +39,15 @@ def load_model_for_ticker(ticker: str):
     if ticker not in loaded_models:
         run_id = TICKER_RUN_IDS[ticker]
         model_uri = f"runs:/{run_id}/model"
-        loaded_models[ticker] = mlflow.sklearn.load_model(model_uri)
+        try:
+            loaded_models[ticker] = mlflow.sklearn.load_model(model_uri)
+        except Exception as e:
+            raise Exception(
+                f"Failed to load model for {ticker} (run_id: {run_id}). "
+                f"URI: {MLFLOW_TRACKING_URI}, Model URI: {model_uri}. "
+                f"Error: {str(e)}. "
+                f"Check if run_id has 'model/' folder in MLflow UI."
+            )
     return loaded_models[ticker]
 
 def build_latest_features(ticker: str):
