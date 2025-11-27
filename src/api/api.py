@@ -6,6 +6,9 @@ import pandas as pd
 from datetime import datetime
 import uvicorn
 import os
+import io
+
+from google.cloud import storage  
 
 # -------------------------------------------------------------------
 # MLflow configuration
@@ -13,10 +16,14 @@ import os
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-# Path to processed data (mounted in Docker or local)
-DATA_PATH = os.getenv("DATA_PATH", "../data/processed")
+# GCS location for processed data, e.g.
+# gs://mlops-tiker-bucket/processed
+GCS_PROCESSED_PREFIX = os.getenv(
+    "GCS_PROCESSED_PREFIX",
+    "gs://mlops-tiker-bucket/processed",
+)
 
-
+# FastAPI app
 app = FastAPI(title="Insurance Weekly Price Predictor")
 
 # One registry model per ticker
@@ -33,6 +40,9 @@ DEFAULT_STAGE = os.getenv("MODEL_STAGE", "Staging")
 loaded_models: Dict[str, object] = {}
 loaded_uris: Dict[str, str] = {}
 
+# GCS client (uses GOOGLE_APPLICATION_CREDENTIALS in container)
+storage_client = storage.Client()
+
 
 class AutoPredictResponse(BaseModel):
     ticker: str
@@ -44,13 +54,36 @@ class AutoPredictResponse(BaseModel):
     latest_time: str
 
 
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
+def _read_processed_csv_from_gcs(ticker: str) -> pd.DataFrame:
+    """
+    Read {ticker}_weekly_clean.csv from GCS, under GCS_PROCESSED_PREFIX.
+    Example prefix: gs://mlops-tiker-bucket/processed
+    """
+    if not GCS_PROCESSED_PREFIX.startswith("gs://"):
+        raise ValueError("GCS_PROCESSED_PREFIX must start with 'gs://'")
+
+    # Split "gs://bucket/path" into bucket + prefix
+    _, path = GCS_PROCESSED_PREFIX.split("gs://", 1)
+    parts = path.split("/", 1)
+    bucket_name = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ""
+
+    blob_path = f"{prefix}/{ticker}_weekly_clean.csv" if prefix else f"{ticker}_weekly_clean.csv"
+
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(blob_path)
+
+    if not blob.exists():
+        raise FileNotFoundError(f"Blob gs://{bucket_name}/{blob_path} not found")
+
+    data = blob.download_as_bytes()
+    return pd.read_csv(io.BytesIO(data), parse_dates=["time"])
+
+
 def load_model_for_ticker(ticker: str):
     """
     Load the MLflow model for a given ticker from the Model Registry,
-    using the configured stage (default: 'Production').
+    using the configured stage (default: 'Staging').
     Caches the model in memory for reuse.
     """
     if ticker not in MODEL_NAMES:
@@ -80,14 +113,10 @@ def load_model_for_ticker(ticker: str):
 
 def build_latest_features(ticker: str):
     """
-    Load the latest processed weekly data for a ticker and construct
+    Load the latest processed weekly data for a ticker from GCS and construct
     the feature vector expected by the model.
     """
-    file_path = os.path.join(DATA_PATH, f"{ticker}_weekly_clean.csv")
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(file_path)
-
-    df = pd.read_csv(file_path, parse_dates=["time"])
+    df = _read_processed_csv_from_gcs(ticker)
     df = df.sort_values("time").reset_index(drop=True)
 
     df["close_lag1"] = df["close"].shift(1)
@@ -112,7 +141,12 @@ def build_latest_features(ticker: str):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "tracking_uri": MLFLOW_TRACKING_URI, "stage": DEFAULT_STAGE}
+    return {
+        "status": "ok",
+        "tracking_uri": MLFLOW_TRACKING_URI,
+        "stage": DEFAULT_STAGE,
+        "gcs_prefix": GCS_PROCESSED_PREFIX,
+    }
 
 
 @app.get("/predict_next_week", response_model=AutoPredictResponse)
