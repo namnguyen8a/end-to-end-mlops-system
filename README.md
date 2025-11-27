@@ -46,10 +46,50 @@ Before running the project, ensure you have:
 
 Follow these steps exactly to get the system up and running.
 
-### 1. Clone the Repository
+## 1. Installation & Local Setup
+
+Start by cloning the repository and setting up your local Python environment. We use **[uv](https://github.com/astral-sh/uv)** for ultra-fast package management and virtual environment creation.
+
+### 1.1 Clone the Repository
 ```bash
 git clone https://github.com/namnguyen8a/namnguyen8a-end-to-end-mlops-system.git
 cd namnguyen8a-end-to-end-mlops-system
+```
+
+### 1.2 Install `uv`
+If you do not have `uv` installed, run one of the following commands:
+
+```bash
+# MacOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or via standard pip
+pip install uv
+```
+
+### 1.3 Create & Activate Virtual Environment
+Initialize a clean virtual environment in your project root and activate it:
+
+```bash
+# 1. Create virtual environment
+uv venv
+
+# 2. Activate virtual environment
+# On MacOS / Linux:
+source .venv/bin/activate
+
+# On Windows:
+.venv\Scripts\activate
+```
+
+### 1.4 Install Dependencies
+Install all project requirements using `uv` (significantly faster than standard pip):
+
+```bash
+uv pip install -r requirements.txt
 ```
 
 ## 2. Infrastructure & Credentials Setup
