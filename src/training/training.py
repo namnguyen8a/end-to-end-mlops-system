@@ -10,6 +10,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from mlflow.tracking import MlflowClient  
+
 # Configure logging
 log_dir = "../logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -20,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(log_file),
-        logging.StreamHandler(),  # Also print to console
+        logging.StreamHandler(),
     ],
 )
 
@@ -54,20 +56,22 @@ results = []
 models = {}
 scalers = {}
 
+client = MlflowClient()  
+
 for ticker in TICKERS:
     try:
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing ticker: {ticker}")
         logger.info(f"{'='*60}")
-        
+
         # Load data
         file_path = os.path.join(DATA_PATH, f"{ticker}_weekly_clean.csv")
         logger.info(f"Loading data from: {file_path}")
-        
+
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
             continue
-            
+
         df = pd.read_csv(file_path, parse_dates=["time"])
         logger.info(f"Loaded {len(df)} rows for {ticker}")
 
@@ -79,7 +83,7 @@ for ticker in TICKERS:
         df["ma_5"] = df["close"].rolling(window=5).mean()
         df["ma_10"] = df["close"].rolling(window=10).mean()
         df["std_5"] = df["close"].rolling(window=5).std()
-        
+
         initial_count = len(df)
         df = df.dropna().reset_index(drop=True)
         dropped_count = initial_count - len(df)
@@ -95,11 +99,10 @@ for ticker in TICKERS:
         X_train, X_temp, y_train, y_temp = train_test_split(
             X, y, test_size=0.3, shuffle=False, random_state=RANDOM_STATE,
         )
-
         X_val, X_test, y_val, y_test = train_test_split(
             X_temp, y_temp, test_size=0.5, shuffle=False, random_state=RANDOM_STATE,
         )
-        
+
         logger.info(f"Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
         # Normalize with StandardScaler (fit on train only)
@@ -115,7 +118,7 @@ for ticker in TICKERS:
         model = LinearRegression()
         model.fit(X_train_scaled, y_train)
         logger.info("Model training completed")
-        
+
         # Evaluate on test set
         logger.info("Evaluating on test set...")
         y_pred = model.predict(X_test_scaled)
@@ -124,39 +127,42 @@ for ticker in TICKERS:
         mse = mean_squared_error(y_test, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_test, y_pred)
-        
+
         logger.info(f"Metrics for {ticker}:")
         logger.info(f"  MAE:  {mae:.6f}")
         logger.info(f"  RMSE: {rmse:.6f}")
         logger.info(f"  R²:   {r2:.6f}")
 
-        results.append({
-            "ticker": ticker,
-            "n_samples": len(df),
-            "n_train": len(X_train),
-            "n_val": len(X_val),
-            "n_test": len(X_test),
-            "MAE": mae,
-            "RMSE": rmse,
-            "R2": r2,
-        })
+        results.append(
+            {
+                "ticker": ticker,
+                "n_samples": len(df),
+                "n_train": len(X_train),
+                "n_val": len(X_val),
+                "n_test": len(X_test),
+                "MAE": mae,
+                "RMSE": rmse,
+                "R2": r2,
+            }
+        )
 
         models[ticker] = model
         scalers[ticker] = scaler
 
-        # --- MLflow Tracking ---
+        # --- MLflow Tracking + Registry ---
         logger.info("Logging to MLflow...")
         try:
             import joblib
-            
+
             run_name = f"linear_{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
+            model_name = f"{ticker}_weekly_linear"  # one registry model per ticker
+
             with mlflow.start_run(run_name=run_name):
                 # Set tags
                 mlflow.set_tag("feature_engineering", "lag+rolling")
                 mlflow.set_tag("model_type", "LinearRegression")
                 mlflow.set_tag("ticker", ticker)
-                
+
                 # Log parameters
                 mlflow.log_param("ticker", ticker)
                 mlflow.log_param("n_samples", len(df))
@@ -165,34 +171,59 @@ for ticker in TICKERS:
                 mlflow.log_param("n_test", len(X_test))
                 mlflow.log_param("random_state", RANDOM_STATE)
                 mlflow.log_param("features", ",".join(feature_cols))
-                
+
                 # Log metrics
                 mlflow.log_metric("MAE", mae)
                 mlflow.log_metric("RMSE", rmse)
                 mlflow.log_metric("R2", r2)
-                
+
                 # Save and log model artifact
                 model_path = os.path.join(ARTIFACT_DIR, f"{ticker}_linear.joblib")
                 joblib.dump(model, model_path)
                 mlflow.log_artifact(model_path, artifact_path="artifacts")
-                mlflow.sklearn.log_model(model, "model")
+
+                # Log MLflow model for registry
+                mlflow.sklearn.log_model(model, artifact_path="model")
                 logger.info(f"Model saved to: {model_path}")
-                
+
                 # Save and log scaler artifact
                 scaler_path = os.path.join(ARTIFACT_DIR, f"{ticker}_scaler.joblib")
                 joblib.dump(scaler, scaler_path)
                 mlflow.log_artifact(scaler_path, artifact_path="artifacts")
                 logger.info(f"Scaler saved to: {scaler_path}")
-                
+
+                # ------- REGISTER MODEL IN REGISTRY (NEW) -------
+                run_id = mlflow.active_run().info.run_id
+                registered = mlflow.register_model(
+                    model_uri=f"runs:/{run_id}/model",
+                    name=model_name,
+                )
+                version = registered.version
+                logger.info(
+                    f"Registered model {model_name} version {version} "
+                    f"from run_id={run_id}"
+                )
+
+                # Optionally set initial stage (e.g., Staging)
+                client.transition_model_version_stage(
+                    name=model_name,
+                    version=version,
+                    stage="Staging",  # later promote best to "Production"
+                )
+                logger.info(
+                    f"Model {model_name} version {version} moved to 'Staging' stage"
+                )
+                # -----------------------------------------------
+
             logger.info(f"MLflow logging completed for {ticker} (run: {run_name})")
         except Exception as mlflow_error:
             logger.warning(f"MLflow logging failed for {ticker}: {str(mlflow_error)}")
             logger.warning("Continuing without MLflow logging...")
-            
-        logger.info(f"✓ Successfully completed training for {ticker}")
-        
+
+        logger.info(f"Successfully completed training for {ticker}")
+
     except Exception as e:
-        logger.error(f"✗ Error processing {ticker}: {str(e)}", exc_info=True)
+        logger.error(f"Error processing {ticker}: {str(e)}", exc_info=True)
         continue
 
 results_df = pd.DataFrame(results)
@@ -204,5 +235,7 @@ logger.info(f"Successfully trained {len(results)} tickers")
 logger.info("=" * 60)
 logger.info("\nFinal Results Summary:")
 for _, row in results_df.iterrows():
-    logger.info(f"  {row['ticker']}: MAE={row['MAE']:.4f}, RMSE={row['RMSE']:.4f}, R²={row['R2']:.4f}")
+    logger.info(
+        f"  {row['ticker']}: MAE={row['MAE']:.4f}, RMSE={row['RMSE']:.4f}, R²={row['R2']:.4f}"
+    )
 logger.info(f"\nLog file saved to: {log_file}")
