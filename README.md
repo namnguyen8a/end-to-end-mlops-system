@@ -191,8 +191,7 @@ docker compose exec airflow-scheduler /usr/local/bin/python -m pip install \
 To ensure Airflow and other services can read/write to the mounted `data/` volume without permission errors, run the included utility script:
 
 ```bash
-chmod +x src/utils/fix_perms.sh
-./src/utils/fix_perms.sh
+bash src/utils/fix_perms.sh
 ```
 
 ---
