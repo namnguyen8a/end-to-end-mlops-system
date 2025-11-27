@@ -1,4 +1,5 @@
 import os
+import io
 import logging
 import numpy as np
 import pandas as pd
@@ -9,10 +10,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from mlflow.tracking import MlflowClient
+from google.cloud import storage
 
-from mlflow.tracking import MlflowClient  
-
-# Configure logging
+# ---------------- Logging ----------------
 log_dir = "../logs"
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
@@ -25,30 +26,63 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-
 logger = logging.getLogger(__name__)
 
-# MLflow Configuration
+# ---------------- MLflow config ----------------
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 mlflow.set_experiment("insurance_weekly_training_v2")
 logger.info(f"MLflow tracking URI: {MLFLOW_TRACKING_URI}")
-logger.info(f"MLflow experiment: insurance_weekly_training")
+logger.info(f"MLflow experiment: insurance_weekly_training_v2")
 
-# Artifact directory for model/scaler outputs
+# ---------------- Artifacts ----------------
 ARTIFACT_DIR = "../artifacts"
 os.makedirs(ARTIFACT_DIR, exist_ok=True)
 logger.info(f"Artifact directory: {ARTIFACT_DIR}")
 
-DATA_PATH = "../data/processed"
+# ---------------- Data config (GCS) ----------------
 TICKERS = ["BIC", "BMI", "BVH", "MIG", "PGI"]
 RANDOM_STATE = 42
 
+# GCS prefix where you uploaded *_weekly_clean.csv
+# e.g. gs://mlops-tiker-bucket/processed/BIC_weekly_clean.csv
+GCS_PROCESSED_PREFIX = os.getenv(
+    "GCS_PROCESSED_PREFIX",
+    "gs://mlops-tiker-bucket/processed",
+)
+
+storage_client = storage.Client()
+
+def read_weekly_from_gcs(ticker: str) -> pd.DataFrame:
+    """
+    Read {ticker}_weekly_clean.csv from GCS_PROCESSED_PREFIX.
+    """
+    if not GCS_PROCESSED_PREFIX.startswith("gs://"):
+        raise ValueError("GCS_PROCESSED_PREFIX must start with 'gs://'")
+
+    _, path = GCS_PROCESSED_PREFIX.split("gs://", 1)
+    parts = path.split("/", 1)
+    bucket_name = parts[0]
+    prefix = parts[1] if len(parts) > 1 else ""
+
+    blob_path = f"{prefix}/{ticker}_weekly_clean.csv" if prefix else f"{ticker}_weekly_clean.csv"
+
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(blob_path)
+
+    if not blob.exists():
+        raise FileNotFoundError(f"Blob gs://{bucket_name}/{blob_path} not found")
+
+    data = blob.download_as_bytes()
+    df = pd.read_csv(io.BytesIO(data), parse_dates=["time"])
+    return df
+
+# ---------------- Pipeline log header ----------------
 logger.info("=" * 60)
 logger.info("Starting training pipeline")
 logger.info(f"Tickers to train: {TICKERS}")
 logger.info(f"Random state: {RANDOM_STATE}")
-logger.info(f"Data path: {DATA_PATH}")
+logger.info(f"GCS processed prefix: {GCS_PROCESSED_PREFIX}")
 logger.info(f"Log file: {log_file}")
 logger.info("=" * 60)
 
@@ -56,7 +90,7 @@ results = []
 models = {}
 scalers = {}
 
-client = MlflowClient()  
+client = MlflowClient()
 
 for ticker in TICKERS:
     try:
@@ -64,18 +98,12 @@ for ticker in TICKERS:
         logger.info(f"Processing ticker: {ticker}")
         logger.info(f"{'='*60}")
 
-        # Load data
-        file_path = os.path.join(DATA_PATH, f"{ticker}_weekly_clean.csv")
-        logger.info(f"Loading data from: {file_path}")
-
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            continue
-
-        df = pd.read_csv(file_path, parse_dates=["time"])
+        # -------- Load data from GCS --------
+        logger.info("Loading data from GCS...")
+        df = read_weekly_from_gcs(ticker)
         logger.info(f"Loaded {len(df)} rows for {ticker}")
 
-        # Feature engineering
+        # -------- Feature engineering --------
         logger.info("Creating features...")
         df = df.sort_values("time").reset_index(drop=True)
         df["close_lag1"] = df["close"].shift(1)
@@ -94,7 +122,7 @@ for ticker in TICKERS:
         y = df["close"].values
         logger.info(f"Feature matrix shape: {X.shape}, Target shape: {y.shape}")
 
-        # Train/Val/Test split
+        # -------- Train/Val/Test split --------
         logger.info("Splitting data into train/val/test...")
         X_train, X_temp, y_train, y_temp = train_test_split(
             X, y, test_size=0.3, shuffle=False, random_state=RANDOM_STATE,
@@ -105,7 +133,7 @@ for ticker in TICKERS:
 
         logger.info(f"Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
-        # Normalize with StandardScaler (fit on train only)
+        # -------- Scaling --------
         logger.info("Fitting StandardScaler on training data...")
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
@@ -113,13 +141,13 @@ for ticker in TICKERS:
         X_test_scaled = scaler.transform(X_test)
         logger.info("Scaling completed")
 
-        # Train model
+        # -------- Train model --------
         logger.info("Training LinearRegression model...")
         model = LinearRegression()
         model.fit(X_train_scaled, y_train)
         logger.info("Model training completed")
 
-        # Evaluate on test set
+        # -------- Evaluation --------
         logger.info("Evaluating on test set...")
         y_pred = model.predict(X_test_scaled)
 
@@ -149,21 +177,21 @@ for ticker in TICKERS:
         models[ticker] = model
         scalers[ticker] = scaler
 
-        # --- MLflow Tracking + Registry ---
+        # -------- MLflow Tracking + Registry --------
         logger.info("Logging to MLflow...")
         try:
             import joblib
 
             run_name = f"linear_{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            model_name = f"{ticker}_weekly_linear"  # one registry model per ticker
+            model_name = f"{ticker}_weekly_linear"
 
             with mlflow.start_run(run_name=run_name):
-                # Set tags
+                # Tags
                 mlflow.set_tag("feature_engineering", "lag+rolling")
                 mlflow.set_tag("model_type", "LinearRegression")
                 mlflow.set_tag("ticker", ticker)
 
-                # Log parameters
+                # Params
                 mlflow.log_param("ticker", ticker)
                 mlflow.log_param("n_samples", len(df))
                 mlflow.log_param("n_train", len(X_train))
@@ -172,27 +200,27 @@ for ticker in TICKERS:
                 mlflow.log_param("random_state", RANDOM_STATE)
                 mlflow.log_param("features", ",".join(feature_cols))
 
-                # Log metrics
+                # Metrics
                 mlflow.log_metric("MAE", mae)
                 mlflow.log_metric("RMSE", rmse)
                 mlflow.log_metric("R2", r2)
 
-                # Save and log model artifact
+                # Local artifacts
                 model_path = os.path.join(ARTIFACT_DIR, f"{ticker}_linear.joblib")
-                joblib.dump(model, model_path)
-                mlflow.log_artifact(model_path, artifact_path="artifacts")
+                scaler_path = os.path.join(ARTIFACT_DIR, f"{ticker}_scaler.joblib")
 
-                # Log MLflow model for registry
+                joblib.dump(model, model_path)
+                joblib.dump(scaler, scaler_path)
+
+                mlflow.log_artifact(model_path, artifact_path="artifacts")
+                mlflow.log_artifact(scaler_path, artifact_path="artifacts")
+
+                # MLflow model
                 mlflow.sklearn.log_model(model, artifact_path="model")
                 logger.info(f"Model saved to: {model_path}")
-
-                # Save and log scaler artifact
-                scaler_path = os.path.join(ARTIFACT_DIR, f"{ticker}_scaler.joblib")
-                joblib.dump(scaler, scaler_path)
-                mlflow.log_artifact(scaler_path, artifact_path="artifacts")
                 logger.info(f"Scaler saved to: {scaler_path}")
 
-                # ------- REGISTER MODEL IN REGISTRY (NEW) -------
+                # Register model
                 run_id = mlflow.active_run().info.run_id
                 registered = mlflow.register_model(
                     model_uri=f"runs:/{run_id}/model",
@@ -200,20 +228,18 @@ for ticker in TICKERS:
                 )
                 version = registered.version
                 logger.info(
-                    f"Registered model {model_name} version {version} "
-                    f"from run_id={run_id}"
+                    f"Registered model {model_name} version {version} from run_id={run_id}"
                 )
 
-                # Optionally set initial stage (e.g., Staging)
+                # Set to Staging by default
                 client.transition_model_version_stage(
                     name=model_name,
                     version=version,
-                    stage="Staging",  # later promote best to "Production"
+                    stage="Staging",
                 )
                 logger.info(
                     f"Model {model_name} version {version} moved to 'Staging' stage"
                 )
-                # -----------------------------------------------
 
             logger.info(f"MLflow logging completed for {ticker} (run: {run_name})")
         except Exception as mlflow_error:
@@ -226,6 +252,7 @@ for ticker in TICKERS:
         logger.error(f"Error processing {ticker}: {str(e)}", exc_info=True)
         continue
 
+# ---------------- Summary ----------------
 results_df = pd.DataFrame(results)
 print(results_df)
 
