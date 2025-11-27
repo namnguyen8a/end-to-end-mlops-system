@@ -1,30 +1,38 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Dict
 import mlflow
 import pandas as pd
-import numpy as np
 from datetime import datetime
 import uvicorn
 import os
 
+# -------------------------------------------------------------------
+# MLflow configuration
+# -------------------------------------------------------------------
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-# Use environment variable if set, otherwise default to relative path
+# Path to processed data (mounted in Docker or local)
 DATA_PATH = os.getenv("DATA_PATH", "../data/processed")
+
 
 app = FastAPI(title="Insurance Weekly Price Predictor")
 
-TICKER_RUN_IDS = {
-    "BIC": "226e478c79ad48a0a6551b7d259c2f36",
-    "BMI": "8a813ff6ef004ec0800e22cbd70e57c9",
-    "BVH": "7d73e7505bfd4ba8944cf09392d6f4f0",
-    "MIG": "7f70025b488d4afa9ad841960a3b130d",
-    "PGI": "9c87b1ff438543798772971c183ec17c",
+# One registry model per ticker
+MODEL_NAMES: Dict[str, str] = {
+    "BIC": "BIC_weekly_linear",
+    "BMI": "BMI_weekly_linear",
+    "BVH": "BVH_weekly_linear",
+    "MIG": "MIG_weekly_linear",
+    "PGI": "PGI_weekly_linear",
 }
 
-loaded_models = {}
+DEFAULT_STAGE = os.getenv("MODEL_STAGE", "Staging")
+
+loaded_models: Dict[str, object] = {}
+loaded_uris: Dict[str, str] = {}
+
 
 class AutoPredictResponse(BaseModel):
     ticker: str
@@ -32,28 +40,53 @@ class AutoPredictResponse(BaseModel):
     predicted_close: float
     currency: str
     generated_at_utc: str
-    run_id: str
+    model_uri: str
     latest_time: str
 
+
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
 def load_model_for_ticker(ticker: str):
+    """
+    Load the MLflow model for a given ticker from the Model Registry,
+    using the configured stage (default: 'Production').
+    Caches the model in memory for reuse.
+    """
+    if ticker not in MODEL_NAMES:
+        raise HTTPException(status_code=404, detail="Ticker not supported")
+
     if ticker not in loaded_models:
-        run_id = TICKER_RUN_IDS[ticker]
-        model_uri = f"runs:/{run_id}/model"
+        model_name = MODEL_NAMES[ticker]
+        model_uri = f"models:/{model_name}/{DEFAULT_STAGE}"
         try:
-            loaded_models[ticker] = mlflow.sklearn.load_model(model_uri)
+            model = mlflow.sklearn.load_model(model_uri)
         except Exception as e:
-            raise Exception(
-                f"Failed to load model for {ticker} (run_id: {run_id}). "
-                f"URI: {MLFLOW_TRACKING_URI}, Model URI: {model_uri}. "
-                f"Error: {str(e)}. "
-                f"Check if run_id has 'model/' folder in MLflow UI."
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Failed to load model for {ticker} from registry. "
+                    f"Tracking URI: {MLFLOW_TRACKING_URI}, Model URI: {model_uri}. "
+                    f"Error: {str(e)}. "
+                    f"Check that model '{model_name}' has a version in stage "
+                    f"'{DEFAULT_STAGE}' and that artifacts are accessible."
+                ),
             )
+        loaded_models[ticker] = model
+        loaded_uris[ticker] = model_uri
+
     return loaded_models[ticker]
 
+
 def build_latest_features(ticker: str):
+    """
+    Load the latest processed weekly data for a ticker and construct
+    the feature vector expected by the model.
+    """
     file_path = os.path.join(DATA_PATH, f"{ticker}_weekly_clean.csv")
     if not os.path.exists(file_path):
         raise FileNotFoundError(file_path)
+
     df = pd.read_csv(file_path, parse_dates=["time"])
     df = df.sort_values("time").reset_index(drop=True)
 
@@ -75,33 +108,45 @@ def build_latest_features(ticker: str):
     latest_time = latest_row["time"].isoformat()
     return features, latest_time
 
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "tracking_uri": MLFLOW_TRACKING_URI, "stage": DEFAULT_STAGE}
+
+
 @app.get("/predict_next_week", response_model=AutoPredictResponse)
 def predict_next_week(ticker: str):
     ticker = ticker.upper()
-    if ticker not in TICKER_RUN_IDS:
+    if ticker not in MODEL_NAMES:
         raise HTTPException(status_code=404, detail="Ticker not supported")
 
+    # Build features from latest data
     try:
         features, latest_time = build_latest_features(ticker)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not build features: {e}")
 
+    # Load registry model and predict
     try:
         model = load_model_for_ticker(ticker)
         predicted_close = float(model.predict([features])[0])
+        model_uri = loaded_uris[ticker]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
-    run_id = TICKER_RUN_IDS[ticker]
     return AutoPredictResponse(
         ticker=ticker,
         horizon="1_week_ahead",
         predicted_close=predicted_close,
         currency="VND",
         generated_at_utc=datetime.utcnow().isoformat() + "Z",
-        run_id=run_id,
+        model_uri=model_uri,
         latest_time=latest_time,
     )
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
